@@ -1,0 +1,175 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>AI Voice Controller Dashboard</title>
+    <style>
+      body {
+        font-family: "Segoe UI", Arial, sans-serif;
+        text-align: center;
+        margin-top: 60px;
+        background-color: #f1f2f6;
+        color: #2f3542;
+      }
+      .dashboard-card {
+        background: white;
+        padding: 40px;
+        display: inline-block;
+        border-radius: 12px;
+        box-shadow: 0px 8px 16px rgba(0, 0, 0, 0.06);
+        max-width: 450px;
+        width: 100%;
+      }
+      button {
+        font-size: 18px;
+        padding: 14px 28px;
+        background-color: #ff4757;
+        color: white;
+        border: none;
+        border-radius: 30px;
+        cursor: pointer;
+        transition: all 0.2s ease;
+        font-weight: bold;
+      }
+      button:hover {
+        background-color: #ff6b81;
+        transform: scale(1.02);
+      }
+      button:disabled {
+        background-color: #a4b0be;
+        cursor: not-allowed;
+        transform: none;
+      }
+      #status-message {
+        color: #57606f;
+        font-size: 15px;
+        margin-top: 15px;
+      }
+      #output-panel {
+        font-weight: bold;
+        font-size: 26px;
+        color: #2ed573;
+        margin-top: 25px;
+        min-height: 35px;
+      }
+      .alert-error {
+        color: #ff4757;
+        font-weight: bold;
+        background: #ffeacc;
+        padding: 10px;
+        border-radius: 6px;
+        margin-top: 15px;
+        display: none;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="dashboard-card">
+      <h2>AI Speech Command Node</h2>
+      <p id="status-message">
+        Press button to initialize system recording node.
+      </p>
+      <button id="record-trigger">🎤 Record Command</button>
+      <div id="error-banner" class="alert-error"></div>
+      <div id="output-panel"></div>
+    </div>
+
+    <script>
+      const recordBtn = document.getElementById("record-trigger");
+      const statusDisplay = document.getElementById("status-message");
+      const outputDisplay = document.getElementById("output-panel");
+      const errorBanner = document.getElementById("error-banner");
+
+      recordBtn.onclick = async () => {
+        errorBanner.style.display = "none";
+        outputDisplay.innerText = "";
+
+        try {
+          // Request mic access
+          const audioStream = await navigator.mediaDevices.getUserMedia({
+            audio: true,
+          });
+
+          recordBtn.disabled = true;
+          statusDisplay.innerText = "Listening closely... Speak now!";
+
+          // Set up Web Audio API to capture raw float arrays at exactly 16000Hz
+          const audioContext = new (
+            window.AudioContext || window.webkitAudioContext
+          )({ sampleRate: 16000 });
+          const source = audioContext.createMediaStreamSource(audioStream);
+          const processor = audioContext.createScriptProcessor(4096, 1, 1);
+
+          let recordingBuffer = [];
+
+          processor.onaudioprocess = (e) => {
+            const inputData = e.inputBuffer.getChannelData(0);
+            recordingBuffer.push(...inputData); // Store raw float samples
+          };
+
+          source.connect(processor);
+          processor.connect(audioContext.destination);
+
+          // Stop recording after exactly 1 second
+          setTimeout(async () => {
+            // Disconnect audio nodes to stop processing
+            source.disconnect();
+            processor.disconnect();
+            audioStream.getTracks().forEach((track) => track.stop());
+            await audioContext.close();
+
+            statusDisplay.innerText = "Transmitting raw audio vectors...";
+
+            // Convert raw JavaScript array to a binary Float32 array buffer
+            const float32Array = new Float32Array(recordingBuffer);
+            const arrayBuffer = float32Array.buffer;
+
+            // Send raw binary array data to Flask
+            const packagingForm = new FormData();
+            packagingForm.append(
+              "audio_data",
+              new Blob([arrayBuffer], { type: "application/octet-stream" }),
+            );
+
+            try {
+              const webRequest = await fetch("/predict", {
+                method: "POST",
+                body: packagingForm,
+              });
+              const responseJSON = await webRequest.json();
+
+              if (responseJSON.command) {
+                outputDisplay.innerText =
+                  "Predicted: " + responseJSON.command.toUpperCase();
+                if (responseJSON.command.toLowerCase() === "go") {
+                  window.open("https://www.google.com", "_blank");
+                } else if (responseJSON.command.toLowerCase() === "yes") {
+                  // Open YouTube instead
+                  window.open("https://www.youtube.com", "_blank");
+                } else if (responseJSON.command.toLowerCase() === "stop") {
+                  // Simply alert the user on screen
+                  alert("System automation halted by voice command.");
+                }
+              } else {
+                errorBanner.innerText = "Server Error: " + responseJSON.error;
+                errorBanner.style.display = "block";
+              }
+            } catch (err) {
+              errorBanner.innerText = "Network transmission failed.";
+              errorBanner.style.display = "block";
+            }
+
+            recordBtn.disabled = false;
+            statusDisplay.innerText =
+              "Click record to send another command node.";
+          }, 1000);
+        } catch (err) {
+          recordBtn.disabled = false;
+          errorBanner.style.display = "block";
+          errorBanner.innerText = "Microphone access error: " + err.message;
+        }
+      };
+    </script>
+  </body>
+</html>
